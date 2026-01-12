@@ -60,7 +60,15 @@ class YfinanceFetcher(BaseFetcher):
         if not code:
             raise DataFetchError("ticker 为空")
 
+        # 容错：用户误把分隔符/标点带进 ticker（如 "RKLB." 或 "AAPL,"）
+        # 仅剔除尾部的 "." 和 ","，不影响类似 "BRK.B" 这种合法形式。
+        code = code.rstrip('.,')
+
         upper = code.upper()
+
+        # yfinance 的 tickers 参数支持空格分隔多个 ticker；为避免误输入造成多 ticker 下载，这里直接拒绝。
+        if any(ch.isspace() for ch in upper) or ',' in upper:
+            raise DataFetchError(f"ticker 格式不正确（疑似包含多个 ticker）: {stock_code!r}；请用逗号分隔，如 AAPL,MSFT")
         if upper.isdigit():
             raise DataFetchError(f"当前版本仅支持美股 ticker，收到纯数字代码: {code}")
 
@@ -91,16 +99,16 @@ class YfinanceFetcher(BaseFetcher):
         # 规范化 ticker
         yf_code = self._normalize_ticker(stock_code)
         
-        logger.debug(f"调用 yfinance.download({yf_code}, {start_date}, {end_date})")
+        logger.debug(f"调用 yfinance.Ticker({yf_code}).history({start_date}, {end_date})")
         
         try:
-            # 使用 yfinance 下载数据
-            df = yf.download(
-                tickers=yf_code,
+            # 使用 Ticker().history 获取单 ticker 数据，避免 download() 在并发下出现列混淆
+            ticker = yf.Ticker(yf_code)
+            df = ticker.history(
                 start=start_date,
                 end=end_date,
-                progress=False,  # 禁止进度条
-                auto_adjust=True,  # 自动调整价格（复权）
+                interval="1d",
+                auto_adjust=True,
             )
             
             if df.empty:
@@ -125,13 +133,17 @@ class YfinanceFetcher(BaseFetcher):
         """
         df = df.copy()
 
-        # yfinance 在部分版本/参数组合下会返回 MultiIndex 列（字段, ticker）。
-        # 当前实现一次只请求一个 ticker，因此这里将列扁平化为字段名。
-        if isinstance(df.columns, pd.MultiIndex):
-            try:
-                df.columns = df.columns.get_level_values(0)
-            except Exception:
-                df.columns = [c[0] if isinstance(c, tuple) and c else str(c) for c in df.columns]
+        # yfinance 通常返回 MultiIndex 列：('Close','AAPL') 这种。
+        # 如果只请求了一个 ticker，则选取该 ticker 的子列；如果出现多个 ticker，则说明输入 ticker 格式有问题。
+        if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels >= 2:
+            tickers = list(dict.fromkeys(df.columns.get_level_values(1)))
+            if len(tickers) > 1:
+                raise DataFetchError(
+                    f"Yahoo Finance 返回了多个 ticker 的数据({tickers})，"
+                    f"请检查输入是否包含空格导致多 ticker：{stock_code!r}"
+                )
+            if len(tickers) == 1:
+                df = df.xs(tickers[0], level=1, axis=1, drop_level=True)
         
         # 重置索引，将日期从索引变为列
         df = df.reset_index()
@@ -151,7 +163,7 @@ class YfinanceFetcher(BaseFetcher):
         
         # 计算涨跌幅（因为 yfinance 不直接提供）
         if 'close' in df.columns:
-            df['pct_chg'] = df['close'].pct_change() * 100
+            df['pct_chg'] = df['close'].pct_change(fill_method=None) * 100
             df['pct_chg'] = df['pct_chg'].fillna(0).round(2)
         
         # 计算成交额（yfinance 不提供，使用估算值）

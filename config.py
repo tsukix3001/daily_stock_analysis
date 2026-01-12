@@ -16,6 +16,61 @@ from dotenv import load_dotenv
 from dataclasses import dataclass, field
 
 
+def _parse_symbol_list(raw: str) -> List[str]:
+    """Parse user-provided symbols from env.
+
+    Accepts comma-separated and/or whitespace-separated formats to be forgiving.
+    Examples:
+      "AAPL,MSFT,TSLA" -> ["AAPL","MSFT","TSLA"]
+      "AAPL MSFT TSLA" -> ["AAPL","MSFT","TSLA"]
+      "RKLB. TSLA" -> ["RKLB.","TSLA"]
+    """
+    if not raw:
+        return []
+
+    # Normalize common separators
+    normalized = raw.replace('\n', ',').replace('\t', ',').replace(';', ',')
+
+    parts: List[str] = []
+    for chunk in normalized.split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        # Also split by whitespace inside a chunk
+        parts.extend([p for p in chunk.split() if p])
+
+    return parts
+
+
+def _is_placeholder_value(value: str) -> bool:
+    """Return True if the value looks like an example/placeholder from .env.example."""
+    if value is None:
+        return True
+    v = str(value).strip()
+    if not v:
+        return True
+    lower = v.lower()
+    # Common placeholder patterns used in this repo's .env.example
+    if lower.startswith("your_"):
+        return True
+    if lower in {
+        "your_xai_key_here",
+        "your_tavily_key_here",
+        "your_serpapi_key_here",
+        "your_key_here",
+    }:
+        return True
+    return False
+
+
+def _parse_key_list(raw: str) -> List[str]:
+    """Parse comma-separated key list and drop placeholders."""
+    if not raw:
+        return []
+    keys = [k.strip() for k in raw.split(',') if k.strip()]
+    return [k for k in keys if not _is_placeholder_value(k)]
+
+
 @dataclass
 class Config:
     """
@@ -124,11 +179,7 @@ class Config:
         
         # 解析自选股列表（逗号分隔）
         stock_list_str = os.getenv('STOCK_LIST', '')
-        stock_list = [
-            code.strip() 
-            for code in stock_list_str.split(',') 
-            if code.strip()
-        ]
+        stock_list = _parse_symbol_list(stock_list_str)
         
         # 如果没有配置，使用默认的示例股票（US tickers）
         if not stock_list:
@@ -150,12 +201,9 @@ class Config:
             or 'grok-2-latest'
         )
         
-        # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
-        tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
-        tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
-        
-        serpapi_keys_str = os.getenv('SERPAPI_API_KEYS', '')
-        serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
+        # 解析搜索引擎 API Keys（支持多个 key，逗号分隔；自动忽略 your_* 占位符）
+        tavily_api_keys = _parse_key_list(os.getenv('TAVILY_API_KEYS', ''))
+        serpapi_keys = _parse_key_list(os.getenv('SERPAPI_API_KEYS', ''))
         
         return cls(
             stock_list=stock_list,

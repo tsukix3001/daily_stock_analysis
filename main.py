@@ -401,6 +401,45 @@ class StockAnalysisPipeline:
             # 捕获所有异常，确保单股失败不影响整体
             logger.exception(f"[{code}] 处理过程发生未知异常: {e}")
             return None
+
+    def _process_single_stock_with_reason(
+        self,
+        code: str,
+        skip_analysis: bool = False,
+    ) -> Tuple[str, Optional[AnalysisResult], Optional[str]]:
+        """处理单只股票，并返回失败原因（用于汇总到报告中）。"""
+        logger.info(f"========== 开始处理 {code} ==========")
+
+        try:
+            # Step 1: 获取并保存数据
+            success, error = self.fetch_and_save_stock_data(code)
+            if not success:
+                logger.warning(f"[{code}] 数据获取失败: {error}")
+
+            if skip_analysis:
+                # dry-run 仅关心数据是否获取成功
+                if success:
+                    return code, None, None
+                return code, None, error or "数据获取失败"
+
+            # Step 2: AI 分析（允许在数据获取失败时尝试用已有数据分析）
+            result = self.analyze_stock(code)
+            if result:
+                logger.info(
+                    f"[{code}] 分析完成: {result.operation_advice}, "
+                    f"评分 {result.sentiment_score}"
+                )
+                return code, result, None
+
+            # result is None
+            if not success and error:
+                return code, None, error
+            return code, None, "分析结果为空（可能无可用历史数据或分析被跳过）"
+
+        except Exception as e:
+            # 捕获所有异常，确保单股失败不影响整体
+            logger.exception(f"[{code}] 处理过程发生未知异常: {e}")
+            return code, None, f"未知异常: {e}"
     
     def run(
         self, 
@@ -440,6 +479,7 @@ class StockAnalysisPipeline:
         logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")
         
         results: List[AnalysisResult] = []
+        failures: Dict[str, str] = {}
         
         # 使用线程池并发处理
         # 注意：max_workers 设置较低（默认3）以避免触发反爬
@@ -447,7 +487,7 @@ class StockAnalysisPipeline:
             # 提交任务
             future_to_code = {
                 executor.submit(
-                    self.process_single_stock, 
+                    self._process_single_stock_with_reason,
                     code, 
                     skip_analysis=dry_run
                 ): code
@@ -458,31 +498,68 @@ class StockAnalysisPipeline:
             for future in as_completed(future_to_code):
                 code = future_to_code[future]
                 try:
-                    result = future.result()
+                    _code, result, reason = future.result()
                     if result:
                         results.append(result)
+                    elif reason:
+                        failures[code] = reason
                 except Exception as e:
                     logger.error(f"[{code}] 任务执行失败: {e}")
+                    failures[code] = f"任务执行失败: {e}"
         
         # 统计
         elapsed_time = time.time() - start_time
         
         # dry-run 模式下，数据获取成功即视为成功
         if dry_run:
-            # 周末/假期可能没有“今日数据”，因此按“最近一次交易日数据是否存在且足够新鲜”统计
-            cutoff = date.today() - timedelta(days=7)
-            success_count = 0
-            for code in stock_codes:
-                latest = self.db.get_latest_data(code, days=1)
-                if latest and latest[0].date and latest[0].date >= cutoff:
-                    success_count += 1
-            fail_count = len(stock_codes) - success_count
+            success_count = len(stock_codes) - len(failures)
+            fail_count = len(failures)
         else:
             success_count = len(results)
             fail_count = len(stock_codes) - success_count
         
         logger.info(f"===== 分析完成 =====")
         logger.info(f"成功: {success_count}, 失败: {fail_count}, 耗时: {elapsed_time:.2f} 秒")
+
+        # 无论是否推送，都将完整报告保存到本地，方便离线查看
+        if not dry_run:
+            try:
+                logger.info("生成决策仪表盘日报（本地保存）...")
+
+                requested = list(stock_codes)
+                analyzed_codes = sorted({r.code for r in results})
+                missing_codes = [c for c in requested if c not in set(analyzed_codes)]
+
+                summary_lines: List[str] = [
+                    "## 本次运行概览",
+                    "",
+                    f"- 请求股票: {', '.join(requested)}",
+                    f"- 成功生成分析: {len(results)}",
+                    f"- 未生成分析: {len(missing_codes)}",
+                ]
+
+                if missing_codes:
+                    summary_lines.extend([
+                        "",
+                        "## 未纳入详细分析的股票（含原因）",
+                        "",
+                    ])
+                    for code in missing_codes:
+                        reason = failures.get(code, "未返回分析结果")
+                        summary_lines.append(f"- **{code}**: {reason}")
+
+                summary_lines.extend(["", "---", ""])  # 分隔符
+
+                if results:
+                    report_body = self.notifier.generate_dashboard_report(results)
+                else:
+                    report_body = "# 决策仪表盘\n\n> 本次运行未生成任何详细分析内容。\n"
+
+                report = "\n".join(summary_lines) + report_body
+                filepath = self.notifier.save_report_to_file(report)
+                logger.info(f"决策仪表盘日报已保存: {filepath}")
+            except Exception as e:
+                logger.warning(f"生成/保存本地报告失败: {e}")
         
         # 发送通知
         if results and send_notification and not dry_run:
@@ -714,10 +791,22 @@ def main() -> int:
     for warning in warnings:
         logger.warning(warning)
     
+    def _parse_symbols(text: str) -> List[str]:
+        if not text:
+            return []
+        normalized = text.replace('\n', ',').replace('\t', ',').replace(';', ',')
+        out: List[str] = []
+        for chunk in normalized.split(','):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            out.extend([p for p in chunk.split() if p])
+        return out
+
     # 解析股票列表
     stock_codes = None
     if args.stocks:
-        stock_codes = [code.strip() for code in args.stocks.split(',') if code.strip()]
+        stock_codes = _parse_symbols(args.stocks)
         logger.info(f"使用命令行指定的股票列表: {stock_codes}")
     
     try:
