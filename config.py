@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-===================================
-A股自选股智能分析系统 - 配置管理模块
-===================================
+"""daily_stock_analysis 配置管理
+
+本项目已调整为：仅分析美股（US tickers），AI 使用 Grok（xAI）API。
 
 职责：
 1. 使用单例模式管理全局配置
@@ -28,26 +27,22 @@ class Config:
     - 类方法 get_instance() 实现单例访问
     """
     
-    # === 自选股配置 ===
+    # === 市场配置 ===
+    market: str = "US"  # 仅支持 US
+
+    # === 自选股配置（US tickers）===
     stock_list: List[str] = field(default_factory=list)
-    
-    # === 数据源 API Token ===
-    tushare_token: Optional[str] = None
-    
-    # === AI 分析配置 ===
-    gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-3-flash-preview"  # 主模型
-    gemini_model_fallback: str = "gemini-2.5-flash"  # 备选模型
-    
-    # Gemini API 请求配置（防止 429 限流）
-    gemini_request_delay: float = 2.0  # 请求间隔（秒）
-    gemini_max_retries: int = 5  # 最大重试次数
-    gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
-    
-    # OpenAI 兼容 API（备选，当 Gemini 不可用时使用）
-    openai_api_key: Optional[str] = None
-    openai_base_url: Optional[str] = None  # 如: https://api.openai.com/v1
-    openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
+
+    # === AI 分析配置（xAI / OpenAI 兼容）===
+    # 支持 xAI Grok（OpenAI 兼容接口）以及其他 OpenAI 兼容服务。
+    llm_api_key: Optional[str] = None
+    llm_base_url: str = "https://api.x.ai/v1"  # xAI 默认（可用 OPENAI_BASE_URL / XAI_BASE_URL 覆盖）
+    llm_model: str = "grok-2-latest"          # 可用 OPENAI_MODEL / XAI_MODEL 覆盖
+
+    # 请求/重试配置（防止 429 限流）
+    llm_request_delay: float = 1.0  # 请求间隔（秒）
+    llm_max_retries: int = 5
+    llm_retry_delay: float = 3.0
     
     # === 搜索引擎配置（支持多 Key 负载均衡）===
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
@@ -90,9 +85,6 @@ class Config:
     # Akshare 请求间隔范围（秒）
     akshare_sleep_min: float = 2.0
     akshare_sleep_max: float = 5.0
-    
-    # Tushare 每分钟最大请求数（免费配额）
-    tushare_rate_limit_per_minute: int = 80
     
     # 重试配置
     max_retries: int = 3
@@ -138,9 +130,25 @@ class Config:
             if code.strip()
         ]
         
-        # 如果没有配置，使用默认的示例股票
+        # 如果没有配置，使用默认的示例股票（US tickers）
         if not stock_list:
-            stock_list = ['600519', '000001', '300750']
+            stock_list = ['AAPL', 'MSFT', 'SPY']
+
+        # LLM 配置：优先 XAI_API_KEY，其次 OPENAI_API_KEY
+        llm_api_key = (
+            os.getenv('XAI_API_KEY')
+            or os.getenv('OPENAI_API_KEY')
+        )
+        llm_base_url = (
+            os.getenv('XAI_BASE_URL')
+            or os.getenv('OPENAI_BASE_URL')
+            or 'https://api.x.ai/v1'
+        )
+        llm_model = (
+            os.getenv('XAI_MODEL')
+            or os.getenv('OPENAI_MODEL')
+            or 'grok-2-latest'
+        )
         
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
@@ -151,16 +159,13 @@ class Config:
         
         return cls(
             stock_list=stock_list,
-            tushare_token=os.getenv('TUSHARE_TOKEN'),
-            gemini_api_key=os.getenv('GEMINI_API_KEY'),
-            gemini_model=os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview'),
-            gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash'),
-            gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
-            gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
-            gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
-            openai_api_key=os.getenv('OPENAI_API_KEY'),
-            openai_base_url=os.getenv('OPENAI_BASE_URL'),
-            openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+            market=os.getenv('MARKET', 'US').upper(),
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model=llm_model,
+            llm_request_delay=float(os.getenv('LLM_REQUEST_DELAY', '1.0')),
+            llm_max_retries=int(os.getenv('LLM_MAX_RETRIES', '5')),
+            llm_retry_delay=float(os.getenv('LLM_RETRY_DELAY', '3.0')),
             tavily_api_keys=tavily_api_keys,
             serpapi_keys=serpapi_keys,
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
@@ -193,17 +198,22 @@ class Config:
             缺失或无效配置项的警告列表
         """
         warnings = []
+
+        if self.market != 'US':
+            warnings.append("警告：当前版本仅支持美股 (MARKET=US)，已忽略其他市场配置")
         
         if not self.stock_list:
             warnings.append("警告：未配置自选股列表 (STOCK_LIST)")
-        
-        if not self.tushare_token:
-            warnings.append("提示：未配置 Tushare Token，将使用其他数据源")
-        
-        if not self.gemini_api_key and not self.openai_api_key:
-            warnings.append("警告：未配置 Gemini 或 OpenAI API Key，AI 分析功能将不可用")
-        elif not self.gemini_api_key:
-            warnings.append("提示：未配置 Gemini API Key，将使用 OpenAI 兼容 API")
+
+        # 美股 ticker 基本校验：纯数字代码通常是 A 股
+        non_us_like = [t for t in self.stock_list if t.strip().isdigit()]
+        if non_us_like:
+            warnings.append(
+                "警告：检测到可能不是美股 ticker 的代码（纯数字）: " + ", ".join(non_us_like)
+            )
+
+        if not self.llm_api_key:
+            warnings.append("警告：未配置 Grok/xAI API Key（XAI_API_KEY 或 OPENAI_API_KEY），AI 分析功能将不可用")
         
         if not self.tavily_api_keys and not self.serpapi_keys:
             warnings.append("提示：未配置搜索引擎 API Key (Tavily/SerpAPI)，新闻搜索功能将不可用")

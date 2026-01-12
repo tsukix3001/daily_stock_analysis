@@ -257,32 +257,23 @@ class DataFetcherManager:
             self._init_default_fetchers()
     
     def _init_default_fetchers(self) -> None:
+        """初始化默认数据源列表（仅美股）
+
+        当前版本仅支持美股 ticker，因此默认只启用 Yahoo Finance（yfinance）。
         """
-        初始化默认数据源列表
-        
-        按优先级排序：
-        1. AkshareFetcher (Priority 1)
-        2. TushareFetcher (Priority 2)
-        3. BaostockFetcher (Priority 3)
-        4. YfinanceFetcher (Priority 4)
-        """
-        from .akshare_fetcher import AkshareFetcher
-        from .tushare_fetcher import TushareFetcher
-        from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
-        
+
         self._fetchers = [
-            AkshareFetcher(),
-            TushareFetcher(),
-            BaostockFetcher(),
             YfinanceFetcher(),
         ]
         
         # 按优先级排序
         self._fetchers.sort(key=lambda f: f.priority)
         
-        logger.info(f"已初始化 {len(self._fetchers)} 个数据源: " + 
-                   ", ".join([f.name for f in self._fetchers]))
+        logger.info(
+            f"已初始化 {len(self._fetchers)} 个数据源: "
+            + ", ".join([f.name for f in self._fetchers])
+        )
     
     def add_fetcher(self, fetcher: BaseFetcher) -> None:
         """添加数据源并重新排序"""

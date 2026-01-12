@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
+""" 
 ===================================
-A股自选股智能分析系统 - 环境验证测试
+美股自选股智能分析系统 - 环境验证测试
 ===================================
 
 用于验证 .env 配置是否正确，包括：
@@ -20,8 +20,7 @@ A股自选股智能分析系统 - 环境验证测试
 
 """
 import os
-os.environ["http_proxy"] = "http://127.0.0.1:10809"
-os.environ["https_proxy"] = "http://127.0.0.1:10809"
+ 
 
 import argparse
 import logging
@@ -64,15 +63,11 @@ def test_config():
     print(f"  调试模式: {config.debug}")
     
     print_section("API 配置")
-    print(f"  Tushare Token: {'已配置 ✓' if config.tushare_token else '未配置 ✗'}")
-    if config.tushare_token:
-        print(f"    Token 前8位: {config.tushare_token[:8]}...")
-    
-    print(f"  Gemini API Key: {'已配置 ✓' if config.gemini_api_key else '未配置 ✗'}")
-    if config.gemini_api_key:
-        print(f"    Key 前8位: {config.gemini_api_key[:8]}...")
-    print(f"  Gemini 主模型: {config.gemini_model}")
-    print(f"  Gemini 备选模型: {config.gemini_model_fallback}")
+    print(f"  xAI/OpenAI API Key: {'已配置 ✓' if config.llm_api_key else '未配置 ✗'}")
+    if config.llm_api_key:
+        print(f"    Key 前8位: {config.llm_api_key[:8]}...")
+    print(f"  Base URL: {config.llm_base_url}")
+    print(f"  Model: {config.llm_model}")
     
     print(f"  企业微信 Webhook: {'已配置 ✓' if config.wechat_webhook_url else '未配置 ✗'}")
     
@@ -168,7 +163,7 @@ def view_database():
     return True
 
 
-def test_data_fetch(stock_code: str = "600519"):
+def test_data_fetch(stock_code: str = "AAPL"):
     """测试数据获取"""
     print_header("3. 数据获取测试")
     
@@ -205,7 +200,7 @@ def test_data_fetch(stock_code: str = "600519"):
 
 def test_llm():
     """测试 LLM 调用"""
-    print_header("4. LLM (Gemini) 调用测试")
+    print_header("4. LLM (xAI/OpenAI兼容) 调用测试")
     
     from analyzer import GeminiAnalyzer
     from config import get_config
@@ -214,18 +209,24 @@ def test_llm():
     config = get_config()
     
     print_section("模型配置")
-    print(f"  主模型: {config.gemini_model}")
-    print(f"  备选模型: {config.gemini_model_fallback}")
+    print(f"  Base URL: {config.llm_base_url}")
+    print(f"  Model: {config.llm_model}")
     
     # 检查网络连接
     print_section("网络连接检查")
     try:
         import socket
+        from urllib.parse import urlparse
+
         socket.setdefaulttimeout(10)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("generativelanguage.googleapis.com", 443))
-        print(f"  ✓ 可以连接到 Google API 服务器")
+        parsed = urlparse(config.llm_base_url)
+        host = parsed.hostname
+        if not host:
+            raise ValueError(f"无法从 Base URL 解析 hostname: {config.llm_base_url}")
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, 443))
+        print(f"  ✓ 可以连接到 LLM API 服务器: {host}:443")
     except Exception as e:
-        print(f"  ✗ 无法连接到 Google API 服务器: {e}")
+        print(f"  ✗ 无法连接到 LLM API 服务器: {e}")
         print(f"  提示: 请检查网络连接或配置代理")
         print(f"  提示: 可以设置环境变量 HTTPS_PROXY=http://your-proxy:port")
         return False
@@ -241,19 +242,18 @@ def test_llm():
     
     # 构造测试上下文
     test_context = {
-        'code': '600519',
+        'code': 'AAPL',
         'date': date.today().isoformat(),
         'today': {
-            'open': 1420.0,
-            'high': 1435.0,
-            'low': 1415.0,
-            'close': 1428.0,
-            'volume': 5000000,
-            'amount': 7140000000,
-            'pct_chg': 0.56,
-            'ma5': 1425.0,
-            'ma10': 1418.0,
-            'ma20': 1410.0,
+            'open': 190.0,
+            'high': 193.0,
+            'low': 189.0,
+            'close': 192.0,
+            'volume': 60000000,
+            'pct_chg': 0.6,
+            'ma5': 191.0,
+            'ma10': 189.5,
+            'ma20': 187.0,
             'volume_ratio': 1.1,
         },
         'ma_status': '多头排列 📈',
@@ -262,8 +262,8 @@ def test_llm():
     }
     
     print_section("发送测试请求")
-    print(f"  测试股票: 贵州茅台 (600519)")
-    print(f"  正在调用 Gemini API（超时: 60秒）...")
+    print(f"  测试股票: AAPL")
+    print(f"  正在调用 LLM API（超时: 60秒）...")
     
     start_time = time.time()
     
@@ -295,13 +295,13 @@ def test_llm():
         error_str = str(e).lower()
         if 'timeout' in error_str or 'unavailable' in error_str:
             print(f"\n  诊断: 网络超时，可能原因:")
-            print(f"    1. 网络不通（需要代理访问 Google）")
+            print(f"    1. 网络不通（可能需要代理）")
             print(f"    2. API 服务暂时不可用")
             print(f"    3. 请求量过大被限流")
         elif 'invalid' in error_str or 'api key' in error_str:
             print(f"\n  诊断: API Key 可能无效")
         elif 'model' in error_str:
-            print(f"\n  诊断: 模型名称可能不正确，尝试修改 .env 中的 GEMINI_MODEL")
+            print(f"\n  诊断: 模型名称可能不正确，尝试修改 .env 中的 XAI_MODEL 或 OPENAI_MODEL")
         
         return False
 
@@ -329,7 +329,7 @@ def test_notification():
     
     test_message = f"""## 🧪 系统测试消息
 
-这是一条来自 **A股自选股智能分析系统** 的测试消息。
+这是一条来自 **美股自选股智能分析系统** 的测试消息。
 
 - 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - 测试目的: 验证企业微信 Webhook 配置
@@ -356,7 +356,7 @@ def test_notification():
 def run_all_tests():
     """运行所有测试"""
     print("\n" + "🚀" * 20)
-    print("  A股自选股智能分析系统 - 环境验证")
+    print("  美股自选股智能分析系统 - 环境验证")
     print("  " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     print("🚀" * 20)
     
@@ -429,7 +429,7 @@ def query_stock_data(stock_code: str, days: int = 10):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='A股自选股智能分析系统 - 环境验证测试',
+        description='美股自选股智能分析系统 - 环境验证测试',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
@@ -438,7 +438,7 @@ def main():
     parser.add_argument('--fetch', action='store_true', help='测试数据获取')
     parser.add_argument('--notify', action='store_true', help='测试通知推送')
     parser.add_argument('--config', action='store_true', help='查看配置')
-    parser.add_argument('--stock', type=str, help='查询指定股票数据，如 --stock 600519')
+    parser.add_argument('--stock', type=str, help='查询指定股票数据，如 --stock AAPL')
     parser.add_argument('--all', action='store_true', help='运行所有测试（包括 LLM）')
     
     args = parser.parse_args()

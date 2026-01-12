@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - 主调度程序
+美股自选股智能分析系统 - 主调度程序
 ===================================
 
 职责：
@@ -23,19 +23,12 @@ A股自选股智能分析系统 - 主调度程序
 """
 import os
 
-# 代理配置 - 仅在本地环境使用，GitHub Actions 不需要
-if os.getenv("GITHUB_ACTIONS") != "true":
-    # 本地开发环境，如需代理请取消注释或修改端口
-    os.environ["http_proxy"] = "http://127.0.0.1:10809"
-    os.environ["https_proxy"] = "http://127.0.0.1:10809"
-    pass
-
 import argparse
 import logging
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -43,8 +36,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from config import get_config, Config
 from storage import get_db, DatabaseManager
 from data_provider import DataFetcherManager
-from data_provider.akshare_fetcher import AkshareFetcher, RealtimeQuote, ChipDistribution
-from analyzer import GeminiAnalyzer, AnalysisResult, STOCK_NAME_MAP
+from analyzer import GeminiAnalyzer, AnalysisResult
 from notification import NotificationService, send_daily_report
 from search_service import SearchService, SearchResponse
 from stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
@@ -109,7 +101,6 @@ def setup_logging(debug: bool = False, log_dir: str = "./logs") -> None:
     # 降低第三方库的日志级别
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('sqlalchemy').setLevel(logging.WARNING)
-    logging.getLogger('google').setLevel(logging.WARNING)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     
     logging.info(f"日志系统初始化完成，日志目录: {log_path.absolute()}")
@@ -148,7 +139,6 @@ class StockAnalysisPipeline:
         # 初始化各模块
         self.db = get_db()
         self.fetcher_manager = DataFetcherManager()
-        self.akshare_fetcher = AkshareFetcher()  # 用于获取增强数据（量比、筹码等）
         self.trend_analyzer = StockTrendAnalyzer()  # 趋势分析器
         self.analyzer = GeminiAnalyzer()
         self.notifier = NotificationService()
@@ -231,35 +221,8 @@ class StockAnalysisPipeline:
             AnalysisResult 或 None（如果分析失败）
         """
         try:
-            # 获取股票名称（优先从实时行情获取真实名称）
-            stock_name = STOCK_NAME_MAP.get(code, '')
-            
-            # Step 1: 获取实时行情（量比、换手率等）
-            realtime_quote: Optional[RealtimeQuote] = None
-            try:
-                realtime_quote = self.akshare_fetcher.get_realtime_quote(code)
-                if realtime_quote:
-                    # 使用实时行情返回的真实股票名称
-                    if realtime_quote.name:
-                        stock_name = realtime_quote.name
-                    logger.info(f"[{code}] {stock_name} 实时行情: 价格={realtime_quote.price}, "
-                              f"量比={realtime_quote.volume_ratio}, 换手率={realtime_quote.turnover_rate}%")
-            except Exception as e:
-                logger.warning(f"[{code}] 获取实时行情失败: {e}")
-            
-            # 如果还是没有名称，使用代码作为名称
-            if not stock_name:
-                stock_name = f'股票{code}'
-            
-            # Step 2: 获取筹码分布
-            chip_data: Optional[ChipDistribution] = None
-            try:
-                chip_data = self.akshare_fetcher.get_chip_distribution(code)
-                if chip_data:
-                    logger.info(f"[{code}] 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                              f"90%集中度={chip_data.concentration_90:.2%}")
-            except Exception as e:
-                logger.warning(f"[{code}] 获取筹码分布失败: {e}")
+            # 美股模式：默认使用 ticker 作为名称
+            stock_name = code
             
             # Step 3: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
@@ -307,11 +270,9 @@ class StockAnalysisPipeline:
                 logger.warning(f"[{code}] 无法获取分析上下文，跳过分析")
                 return None
             
-            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
+            # Step 6: 增强上下文数据（添加趋势分析结果、股票名称）
             enhanced_context = self._enhance_context(
                 context, 
-                realtime_quote, 
-                chip_data, 
                 trend_result,
                 stock_name  # 传入股票名称
             )
@@ -329,20 +290,16 @@ class StockAnalysisPipeline:
     def _enhance_context(
         self,
         context: Dict[str, Any],
-        realtime_quote: Optional[RealtimeQuote],
-        chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
         stock_name: str = ""
     ) -> Dict[str, Any]:
         """
         增强分析上下文
         
-        将实时行情、筹码分布、趋势分析结果、股票名称添加到上下文中
+        将趋势分析结果、股票名称添加到上下文中
         
         Args:
             context: 原始上下文
-            realtime_quote: 实时行情数据
-            chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
             
@@ -354,34 +311,7 @@ class StockAnalysisPipeline:
         # 添加股票名称
         if stock_name:
             enhanced['stock_name'] = stock_name
-        elif realtime_quote and realtime_quote.name:
-            enhanced['stock_name'] = realtime_quote.name
-        
-        # 添加实时行情
-        if realtime_quote:
-            enhanced['realtime'] = {
-                'name': realtime_quote.name,  # 股票名称
-                'price': realtime_quote.price,
-                'volume_ratio': realtime_quote.volume_ratio,
-                'volume_ratio_desc': self._describe_volume_ratio(realtime_quote.volume_ratio),
-                'turnover_rate': realtime_quote.turnover_rate,
-                'pe_ratio': realtime_quote.pe_ratio,
-                'pb_ratio': realtime_quote.pb_ratio,
-                'total_mv': realtime_quote.total_mv,
-                'circ_mv': realtime_quote.circ_mv,
-                'change_60d': realtime_quote.change_60d,
-            }
-        
-        # 添加筹码分布
-        if chip_data:
-            current_price = realtime_quote.price if realtime_quote else 0
-            enhanced['chip'] = {
-                'profit_ratio': chip_data.profit_ratio,
-                'avg_cost': chip_data.avg_cost,
-                'concentration_90': chip_data.concentration_90,
-                'concentration_70': chip_data.concentration_70,
-                'chip_status': chip_data.get_chip_status(current_price),
-            }
+        # 美股模式：不提供 A 股特有的实时量比/换手率/筹码分布字段
         
         # 添加趋势分析结果
         if trend_result:
@@ -539,8 +469,13 @@ class StockAnalysisPipeline:
         
         # dry-run 模式下，数据获取成功即视为成功
         if dry_run:
-            # 检查哪些股票的数据今天已存在
-            success_count = sum(1 for code in stock_codes if self.db.has_today_data(code))
+            # 周末/假期可能没有“今日数据”，因此按“最近一次交易日数据是否存在且足够新鲜”统计
+            cutoff = date.today() - timedelta(days=7)
+            success_count = 0
+            for code in stock_codes:
+                latest = self.db.get_latest_data(code, days=1)
+                if latest and latest[0].date and latest[0].date >= cutoff:
+                    success_count += 1
             fail_count = len(stock_codes) - success_count
         else:
             success_count = len(results)
@@ -596,14 +531,14 @@ class StockAnalysisPipeline:
 def parse_arguments() -> argparse.Namespace:
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='A股自选股智能分析系统',
+        description='美股自选股智能分析系统',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例:
   python main.py                    # 正常运行
   python main.py --debug            # 调试模式
   python main.py --dry-run          # 仅获取数据，不进行 AI 分析
-  python main.py --stocks 600519,000001  # 指定分析特定股票
+    python main.py --stocks AAPL,MSFT      # 指定分析特定股票
   python main.py --no-notify        # 不发送推送通知
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
@@ -770,7 +705,7 @@ def main() -> int:
     setup_logging(debug=args.debug, log_dir=config.log_dir)
     
     logger.info("=" * 60)
-    logger.info("A股自选股智能分析系统 启动")
+    logger.info("美股自选股智能分析系统 启动")
     logger.info(f"运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
     
@@ -801,8 +736,8 @@ def main() -> int:
                     serpapi_keys=config.serpapi_keys
                 )
             
-            if config.gemini_api_key:
-                analyzer = GeminiAnalyzer(api_key=config.gemini_api_key)
+            if config.llm_api_key:
+                analyzer = GeminiAnalyzer(api_key=config.llm_api_key)
             
             run_market_review(notifier, analyzer, search_service)
             return 0

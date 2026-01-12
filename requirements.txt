@@ -1,5 +1,5 @@
 # ===================================
-# A股自选股智能分析系统 - 依赖列表
+# 美股自选股智能分析系统 - 依赖列表
 # ===================================
 
 # 核心依赖
@@ -8,19 +8,15 @@ tenacity>=8.2.0             # 重试机制（指数退避）
 sqlalchemy>=2.0.0           # ORM数据库操作
 schedule>=1.2.0             # 定时任务调度
 
-# 数据源依赖（多源策略）
-akshare>=1.12.0             # Primary: 东方财富爬虫数据源
-tushare>=1.4.0              # Backup 1: 挖地兔 Pro API
-baostock>=0.8.0             # Backup 2: 证券宝数据
-yfinance>=0.2.0             # Fallback: Yahoo Finance
+# 数据源依赖
+yfinance>=0.2.0             # Yahoo Finance（美股/指数）
 
 # 数据处理
 pandas>=2.0.0               # 数据分析
 numpy>=1.24.0               # 数值计算
 
-# AI 分析
-google-generativeai>=0.8.0  # Gemini API
-openai>=1.0.0               # OpenAI 兼容 API（可选，支持 DeepSeek/通义千问等）
+# AI 分析（xAI Grok 通过 OpenAI 兼容接口）
+openai>=1.0.0
 
 # 搜索引擎（用于获取股票新闻）
 tavily-python>=0.3.0        # Tavily 搜索 API（每月 1000 次免费）

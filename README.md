@@ -1,11 +1,11 @@
-# 📈 A股智能分析系统
+# 📈 美股智能分析系统
 
 [![GitHub stars](https://img.shields.io/github/stars/ZhuLinsen/daily_stock_analysis?style=social)](https://github.com/ZhuLinsen/daily_stock_analysis/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Ready-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
 
-> 🤖 基于 AI 大模型的 A 股自选股智能分析系统，每日自动分析并推送「决策仪表盘」到企业微信/飞书/Telegram/邮箱
+> 🤖 基于 AI 大模型的美股自选股智能分析系统，每日自动分析并推送「决策仪表盘」到企业微信/飞书/Telegram/邮箱
 
 ![运行效果演示](./sources/2026-01-10_155341_daily_analysis.gif)
 
@@ -17,15 +17,12 @@
 - **大盘复盘** - 每日市场概览、板块涨跌、北向资金
 - **多渠道推送** - 支持企业微信、飞书、Telegram、邮件（自动识别）
 - **零成本部署** - GitHub Actions 免费运行，无需服务器
-- **💰 白嫖 Gemini API** - Google AI Studio 提供免费额度，个人使用完全够用
-- **🔄 多模型支持** - 支持 OpenAI 兼容 API（DeepSeek、通义千问等）作为备选
+- **🔄 模型支持** - 使用 xAI Grok（OpenAI 兼容接口），也可切换其他 OpenAI 兼容服务
 
 ### 📊 数据来源
-- **行情数据**: AkShare（免费）、Tushare、Baostock、YFinance
-- **新闻搜索**: Tavily、SerpAPI
-- **AI 分析**: 
-  - 主力：Google Gemini（gemini-3-flash-preview）—— [免费获取](https://aistudio.google.com/)
-  - 备选：应大家要求，也支持了OpenAI 兼容 API（DeepSeek、通义千问、Moonshot 等）
+- **行情数据**: Yahoo Finance（yfinance）
+- **新闻搜索**: Tavily、SerpAPI（可选）
+- **AI 分析**: xAI Grok（OpenAI 兼容接口）
 
 ### 🛡️ 交易理念内置
 - ❌ **严禁追高** - 乖离率 > 5% 自动标记「危险」
@@ -47,16 +44,15 @@
 
 进入你 Fork 的仓库 → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
 
-**AI 模型配置（二选一）**
+**AI 模型配置（推荐 xAI Grok）**
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) 获取免费 Key | ✅* |
-| `OPENAI_API_KEY` | OpenAI 兼容 API Key（支持 DeepSeek、通义千问等） | 可选 |
-| `OPENAI_BASE_URL` | OpenAI 兼容 API 地址（如 `https://api.deepseek.com/v1`） | 可选 |
-| `OPENAI_MODEL` | 模型名称（如 `deepseek-chat`） | 可选 |
+| `XAI_API_KEY` | xAI Grok API Key | ✅ |
+| `XAI_BASE_URL` | xAI Base URL（默认 `https://api.x.ai/v1`） | 可选 |
+| `XAI_MODEL` | 模型名称（默认 `grok-2-latest`） | 可选 |
 
-> *注：`GEMINI_API_KEY` 和 `OPENAI_API_KEY` 至少配置一个
+> 也兼容 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`（如你已有现成配置）
 
 **通知渠道配置（可同时配置多个，全部推送）**
 
@@ -76,7 +72,7 @@
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `STOCK_LIST` | 自选股代码，如 `600519,300750,002594` | ✅ |
+| `STOCK_LIST` | 自选股 ticker，如 `AAPL,MSFT,SPY` | ✅ |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/) 备用搜索 | 可选 |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/) Token | 可选 |
@@ -170,14 +166,14 @@ docker-compose logs -f
 
 ```bash
 # === 必填 ===
-GEMINI_API_KEY=your_gemini_key          # Gemini AI
+XAI_API_KEY=your_xai_key                # xAI Grok
 WECHAT_WEBHOOK_URL=https://qyapi...     # 企业微信机器人
-STOCK_LIST=600519,300750,002594         # 自选股列表
+STOCK_LIST=AAPL,MSFT,SPY                # 自选股列表
 
 # === 推荐 ===
 TAVILY_API_KEYS=your_tavily_key         # 新闻搜索
-GEMINI_MODEL=gemini-3-flash-preview     # 主模型
-GEMINI_MODEL_FALLBACK=gemini-2.5-flash  # 备选模型
+XAI_BASE_URL=https://api.x.ai/v1
+XAI_MODEL=grok-2-latest
 
 # === 可选 ===
 TUSHARE_TOKEN=your_token                # Tushare数据源

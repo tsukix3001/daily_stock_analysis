@@ -31,7 +31,8 @@ assignees: ''
 - Python 版本: [例如 3.11]
 - 运行方式: [本地/Docker/GitHub Actions]
 - 相关配置:
-  - GEMINI_MODEL: 
+  - XAI_MODEL / OPENAI_MODEL:
+  - XAI_BASE_URL / OPENAI_BASE_URL:
   - 数据源: 
 
 ## 其他信息

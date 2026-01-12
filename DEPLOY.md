@@ -184,7 +184,7 @@ journalctl -u stock-analyzer -f
 
 | 配置项 | 说明 | 获取方式 |
 |--------|------|----------|
-| `GEMINI_API_KEY` | AI 分析必需 | [Google AI Studio](https://aistudio.google.com/) |
+| `XAI_API_KEY` | AI 分析必需（xAI Grok） | xAI Console |
 | `STOCK_LIST` | 自选股列表 | 逗号分隔的股票代码 |
 | `WECHAT_WEBHOOK_URL` | 微信推送 | 企业微信群机器人 |
 
@@ -201,7 +201,7 @@ journalctl -u stock-analyzer -f
 
 ## 🌐 代理配置
 
-如果服务器在国内，访问 Gemini API 需要代理：
+如需访问外部 API（xAI/Tavily 等）可按需配置代理：
 
 ### Docker 方式
 
@@ -267,7 +267,7 @@ docker-compose build --no-cache
 
 ### 2. API 访问超时
 
-检查代理配置，确保服务器能访问 Gemini API。
+检查网络/代理配置，确保服务器能访问外部 API（xAI/Tavily 等）。
 
 ### 3. 数据库锁定
 
@@ -348,13 +348,13 @@ git push -u origin main
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|------|
-| `GEMINI_API_KEY` | Gemini AI API Key | ✅ |
+| `XAI_API_KEY` | xAI Grok API Key | ✅ |
 | `WECHAT_WEBHOOK_URL` | 企业微信机器人 Webhook | ✅ |
-| `STOCK_LIST` | 自选股列表，如 `600519,300750` | ✅ |
+| `STOCK_LIST` | 自选股列表，如 `AAPL,MSFT,SPY` | ✅ |
 | `TAVILY_API_KEYS` | Tavily 搜索 API Key | 推荐 |
 | `SERPAPI_API_KEYS` | SerpAPI Key | 可选 |
-| `TUSHARE_TOKEN` | Tushare Token | 可选 |
-| `GEMINI_MODEL` | 模型名称（默认 gemini-2.0-flash） | 可选 |
+| `XAI_MODEL` | 模型名称（默认 grok-2-latest） | 可选 |
+| `XAI_BASE_URL` | Base URL（默认 https://api.x.ai/v1） | 可选 |
 
 #### 3. 验证 Workflow 文件
 

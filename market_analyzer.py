@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-大盘复盘分析模块
+大盘复盘分析模块（美股）
 ===================================
 
 职责：
-1. 获取大盘指数数据（上证、深证、创业板）
+1. 获取美股主要指数数据（S&P 500、纳斯达克、道琼斯等）
 2. 搜索市场新闻形成复盘情报
 3. 使用大模型生成每日大盘复盘报告
 """
@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-import akshare as ak
 import pandas as pd
+import yfinance as yf
 
 from config import get_config
 from search_service import SearchService
@@ -86,14 +86,13 @@ class MarketAnalyzer:
     5. 生成大盘复盘报告
     """
     
-    # 主要指数代码
+    # 美股主要指数（Yahoo Finance symbols）
     MAIN_INDICES = {
-        '000001': '上证指数',
-        '399001': '深证成指',
-        '399006': '创业板指',
-        '000688': '科创50',
-        '000016': '上证50',
-        '000300': '沪深300',
+        '^GSPC': 'S&P 500',
+        '^IXIC': 'NASDAQ',
+        '^DJI': 'Dow Jones',
+        '^RUT': 'Russell 2000',
+        '^VIX': 'VIX',
     }
     
     def __init__(self, search_service: Optional[SearchService] = None, analyzer=None):
@@ -120,15 +119,8 @@ class MarketAnalyzer:
         
         # 1. 获取主要指数行情
         overview.indices = self._get_main_indices()
-        
-        # 2. 获取涨跌统计
-        self._get_market_statistics(overview)
-        
-        # 3. 获取板块涨跌榜
-        self._get_sector_rankings(overview)
-        
-        # 4. 获取北向资金（可选）
-        self._get_north_flow(overview)
+
+        # 其余字段（涨跌家数/板块/资金）在美股场景下不做统计，保留为 0
         
         return overview
     
@@ -137,134 +129,59 @@ class MarketAnalyzer:
         indices = []
         
         try:
-            logger.info("[大盘] 获取主要指数实时行情...")
-            
-            # 使用 akshare 获取指数行情
-            df = ak.stock_zh_index_spot_em()
-            
-            if df is not None and not df.empty:
-                for code, name in self.MAIN_INDICES.items():
-                    # 查找对应指数
-                    row = df[df['代码'] == code]
-                    if row.empty:
-                        # 尝试带前缀查找
-                        row = df[df['代码'].str.contains(code)]
-                    
-                    if not row.empty:
-                        row = row.iloc[0]
-                        index = MarketIndex(
-                            code=code,
-                            name=name,
-                            current=float(row.get('最新价', 0) or 0),
-                            change=float(row.get('涨跌额', 0) or 0),
-                            change_pct=float(row.get('涨跌幅', 0) or 0),
-                            open=float(row.get('今开', 0) or 0),
-                            high=float(row.get('最高', 0) or 0),
-                            low=float(row.get('最低', 0) or 0),
-                            prev_close=float(row.get('昨收', 0) or 0),
-                            volume=float(row.get('成交量', 0) or 0),
-                            amount=float(row.get('成交额', 0) or 0),
-                        )
-                        # 计算振幅
-                        if index.prev_close > 0:
-                            index.amplitude = (index.high - index.low) / index.prev_close * 100
-                        indices.append(index)
-                        
-                logger.info(f"[大盘] 获取到 {len(indices)} 个指数行情")
+            logger.info("[Market] 获取美股主要指数行情...")
+
+            for symbol, name in self.MAIN_INDICES.items():
+                try:
+                    df = yf.download(
+                        tickers=symbol,
+                        period="7d",
+                        interval="1d",
+                        progress=False,
+                        auto_adjust=True,
+                    )
+                    if df is None or df.empty:
+                        logger.warning(f"[Market] {symbol} 无数据")
+                        continue
+
+                    df = df.dropna()
+                    df = df.tail(2)
+                    if len(df) < 1:
+                        continue
+
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2] if len(df) >= 2 else None
+
+                    current = float(latest.get('Close', 0) or 0)
+                    prev_close = float(prev.get('Close', 0) or 0) if prev is not None else 0.0
+                    change = current - prev_close if prev_close else 0.0
+                    change_pct = (change / prev_close * 100) if prev_close else 0.0
+
+                    index = MarketIndex(
+                        code=symbol,
+                        name=name,
+                        current=current,
+                        change=change,
+                        change_pct=change_pct,
+                        open=float(latest.get('Open', 0) or 0),
+                        high=float(latest.get('High', 0) or 0),
+                        low=float(latest.get('Low', 0) or 0),
+                        prev_close=prev_close,
+                        volume=float(latest.get('Volume', 0) or 0),
+                        amount=0.0,
+                    )
+                    if index.prev_close > 0:
+                        index.amplitude = (index.high - index.low) / index.prev_close * 100
+                    indices.append(index)
+                except Exception as e:
+                    logger.warning(f"[Market] 获取 {symbol} 失败: {e}")
+
+            logger.info(f"[Market] 获取到 {len(indices)} 个指数行情")
                 
         except Exception as e:
-            logger.error(f"[大盘] 获取指数行情失败: {e}")
+            logger.error(f"[Market] 获取指数行情失败: {e}")
         
         return indices
-    
-    def _get_market_statistics(self, overview: MarketOverview):
-        """获取市场涨跌统计"""
-        try:
-            logger.info("[大盘] 获取市场涨跌统计...")
-            
-            # 获取全部A股实时行情
-            df = ak.stock_zh_a_spot_em()
-            
-            if df is not None and not df.empty:
-                # 涨跌统计
-                change_col = '涨跌幅'
-                if change_col in df.columns:
-                    df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
-                    overview.up_count = len(df[df[change_col] > 0])
-                    overview.down_count = len(df[df[change_col] < 0])
-                    overview.flat_count = len(df[df[change_col] == 0])
-                    
-                    # 涨停跌停统计（涨跌幅 >= 9.9% 或 <= -9.9%）
-                    overview.limit_up_count = len(df[df[change_col] >= 9.9])
-                    overview.limit_down_count = len(df[df[change_col] <= -9.9])
-                
-                # 两市成交额
-                amount_col = '成交额'
-                if amount_col in df.columns:
-                    df[amount_col] = pd.to_numeric(df[amount_col], errors='coerce')
-                    overview.total_amount = df[amount_col].sum() / 1e8  # 转为亿元
-                
-                logger.info(f"[大盘] 涨:{overview.up_count} 跌:{overview.down_count} 平:{overview.flat_count} "
-                          f"涨停:{overview.limit_up_count} 跌停:{overview.limit_down_count} "
-                          f"成交额:{overview.total_amount:.0f}亿")
-                
-        except Exception as e:
-            logger.error(f"[大盘] 获取涨跌统计失败: {e}")
-    
-    def _get_sector_rankings(self, overview: MarketOverview):
-        """获取板块涨跌榜"""
-        try:
-            logger.info("[大盘] 获取板块涨跌榜...")
-            
-            # 获取行业板块行情
-            df = ak.stock_board_industry_name_em()
-            
-            if df is not None and not df.empty:
-                change_col = '涨跌幅'
-                if change_col in df.columns:
-                    df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
-                    df = df.dropna(subset=[change_col])
-                    
-                    # 涨幅前5
-                    top = df.nlargest(5, change_col)
-                    overview.top_sectors = [
-                        {'name': row['板块名称'], 'change_pct': row[change_col]}
-                        for _, row in top.iterrows()
-                    ]
-                    
-                    # 跌幅前5
-                    bottom = df.nsmallest(5, change_col)
-                    overview.bottom_sectors = [
-                        {'name': row['板块名称'], 'change_pct': row[change_col]}
-                        for _, row in bottom.iterrows()
-                    ]
-                    
-                    logger.info(f"[大盘] 领涨板块: {[s['name'] for s in overview.top_sectors]}")
-                    logger.info(f"[大盘] 领跌板块: {[s['name'] for s in overview.bottom_sectors]}")
-                    
-        except Exception as e:
-            logger.error(f"[大盘] 获取板块涨跌榜失败: {e}")
-    
-    def _get_north_flow(self, overview: MarketOverview):
-        """获取北向资金流入"""
-        try:
-            logger.info("[大盘] 获取北向资金...")
-            
-            # 获取北向资金数据
-            df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
-            
-            if df is not None and not df.empty:
-                # 取最新一条数据
-                latest = df.iloc[-1]
-                if '当日净流入' in df.columns:
-                    overview.north_flow = float(latest['当日净流入']) / 1e8  # 转为亿元
-                elif '净流入' in df.columns:
-                    overview.north_flow = float(latest['净流入']) / 1e8
-                    
-                logger.info(f"[大盘] 北向资金净流入: {overview.north_flow:.2f}亿")
-                
-        except Exception as e:
-            logger.warning(f"[大盘] 获取北向资金失败: {e}")
     
     def search_market_news(self) -> List[Dict]:
         """
@@ -281,11 +198,11 @@ class MarketAnalyzer:
         today = datetime.now()
         month_str = f"{today.year}年{today.month}月"
         
-        # 多维度搜索
+        # 多维度搜索（美股）
         search_queries = [
-            f"A股 大盘 复盘 {month_str}",
-            f"股市 行情 分析 今日 {month_str}",
-            f"A股 市场 热点 板块 {month_str}",
+            f"美股 大盘 复盘 {month_str}",
+            f"S&P 500 今日 行情 分析 {month_str}",
+            f"NASDAQ 市场 热点 板块 事件 {month_str}",
         ]
         
         try:
@@ -295,7 +212,7 @@ class MarketAnalyzer:
                 # 使用 search_stock_news 方法，传入"大盘"作为股票名
                 response = self.search_service.search_stock_news(
                     stock_code="market",
-                    stock_name="大盘",
+                    stock_name="美股大盘",
                     max_results=3,
                     focus_keywords=query.split()
                 )
@@ -336,17 +253,7 @@ class MarketAnalyzer:
                 'max_output_tokens': 2048,
             }
             
-            # 根据 analyzer 使用的 API 类型调用
-            if self.analyzer._use_openai:
-                # 使用 OpenAI 兼容 API
-                review = self.analyzer._call_openai_api(prompt, generation_config)
-            else:
-                # 使用 Gemini API
-                response = self.analyzer._model.generate_content(
-                    prompt,
-                    generation_config=generation_config,
-                )
-                review = response.text.strip() if response and response.text else None
+            review = self.analyzer._call_openai_api(prompt, generation_config)
             
             if review:
                 logger.info(f"[大盘] 复盘报告生成成功，长度: {len(review)} 字符")
@@ -383,7 +290,7 @@ class MarketAnalyzer:
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
         
-        prompt = f"""你是一位专业的A股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
+        prompt = f"""你是一位专业的美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
 
 【重要】输出要求：
 - 必须输出纯 Markdown 文本格式
@@ -402,10 +309,7 @@ class MarketAnalyzer:
 {indices_text}
 
 ## 市场概况
-- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
-- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元
-- 北向资金: {overview.north_flow:+.2f} 亿元
+（此版本不统计全市场涨跌家数/成交额/资金流，留空即可）
 
 ## 板块表现
 领涨: {top_sectors_text}
@@ -424,7 +328,7 @@ class MarketAnalyzer:
 （2-3句话概括今日市场整体表现，包括指数涨跌、成交量变化）
 
 ### 二、指数点评
-（分析上证、深证、创业板等各指数走势特点）
+（分析 S&P 500、NASDAQ、道琼斯等指数走势特点）
 
 ### 三、资金动向
 （解读成交额和北向资金流向的含义）
@@ -447,14 +351,14 @@ class MarketAnalyzer:
     def _generate_template_review(self, overview: MarketOverview, news: List) -> str:
         """使用模板生成复盘报告（无大模型时的备选方案）"""
         
-        # 判断市场走势
-        sh_index = next((idx for idx in overview.indices if idx.code == '000001'), None)
-        if sh_index:
-            if sh_index.change_pct > 1:
+        # 判断市场走势（以 S&P 500 为主）
+        spx = next((idx for idx in overview.indices if idx.code == '^GSPC'), None)
+        if spx:
+            if spx.change_pct > 1:
                 market_mood = "强势上涨"
-            elif sh_index.change_pct > 0:
+            elif spx.change_pct > 0:
                 market_mood = "小幅上涨"
-            elif sh_index.change_pct > -1:
+            elif spx.change_pct > -1:
                 market_mood = "小幅下跌"
             else:
                 market_mood = "明显下跌"
@@ -471,23 +375,16 @@ class MarketAnalyzer:
         top_text = "、".join([s['name'] for s in overview.top_sectors[:3]])
         bottom_text = "、".join([s['name'] for s in overview.bottom_sectors[:3]])
         
-        report = f"""## 📊 {overview.date} 大盘复盘
+        report = f"""## 📊 {overview.date} 美股大盘复盘
 
 ### 一、市场总结
-今日A股市场整体呈现**{market_mood}**态势。
+今日美股市场整体呈现**{market_mood}**态势。
 
 ### 二、主要指数
 {indices_text}
 
-### 三、涨跌统计
-| 指标 | 数值 |
-|------|------|
-| 上涨家数 | {overview.up_count} |
-| 下跌家数 | {overview.down_count} |
-| 涨停 | {overview.limit_up_count} |
-| 跌停 | {overview.limit_down_count} |
-| 两市成交额 | {overview.total_amount:.0f}亿 |
-| 北向资金 | {overview.north_flow:+.2f}亿 |
+### 三、说明
+本版本仅提供主要指数概览与新闻要点，不统计全市场涨跌家数/成交额等指标。
 
 ### 四、板块表现
 - **领涨**: {top_text}

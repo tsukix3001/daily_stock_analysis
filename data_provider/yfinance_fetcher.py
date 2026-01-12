@@ -1,17 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-===================================
-YfinanceFetcher - 兜底数据源 (Priority 4)
-===================================
+"""YfinanceFetcher - 美股数据源
 
 数据来源：Yahoo Finance（通过 yfinance 库）
-特点：国际数据源、可能有延迟或缺失
-定位：当所有国内数据源都失败时的最后保障
-
-关键策略：
-1. 自动将 A 股代码转换为 yfinance 格式（.SS / .SZ）
-2. 处理 Yahoo Finance 的数据格式差异
-3. 失败后指数退避重试
+当前项目仅支持美股 ticker（如 AAPL, MSFT, SPY, ^GSPC）。
 """
 
 import logging
@@ -36,7 +27,7 @@ class YfinanceFetcher(BaseFetcher):
     """
     Yahoo Finance 数据源实现
     
-    优先级：4（最低，作为兜底）
+    优先级：1（默认数据源）
     数据来源：Yahoo Finance
     
     关键策略：
@@ -51,43 +42,32 @@ class YfinanceFetcher(BaseFetcher):
     """
     
     name = "YfinanceFetcher"
-    priority = 4
+    priority = 1
     
     def __init__(self):
         """初始化 YfinanceFetcher"""
         pass
     
-    def _convert_stock_code(self, stock_code: str) -> str:
+    def _normalize_ticker(self, stock_code: str) -> str:
+        """规范化 ticker，并强制仅美股。
+
+        规则：
+        - 纯数字（如 600519）视为非美股，直接拒绝
+        - .SS/.SZ/.SH 等后缀视为非美股，直接拒绝
+        - 其他情况直接按原 ticker（大写）使用
         """
-        转换股票代码为 Yahoo Finance 格式
-        
-        Yahoo Finance A 股代码格式：
-        - 沪市：600519.SS (Shanghai Stock Exchange)
-        - 深市：000001.SZ (Shenzhen Stock Exchange)
-        
-        Args:
-            stock_code: 原始代码，如 '600519', '000001'
-            
-        Returns:
-            Yahoo Finance 格式代码，如 '600519.SS', '000001.SZ'
-        """
-        code = stock_code.strip()
-        
-        # 已经包含后缀的情况
-        if '.SS' in code.upper() or '.SZ' in code.upper():
-            return code.upper()
-        
-        # 去除可能的后缀
-        code = code.replace('.SH', '').replace('.sh', '')
-        
-        # 根据代码前缀判断市场
-        if code.startswith(('600', '601', '603', '688')):
-            return f"{code}.SS"
-        elif code.startswith(('000', '002', '300')):
-            return f"{code}.SZ"
-        else:
-            logger.warning(f"无法确定股票 {code} 的市场，默认使用深市")
-            return f"{code}.SZ"
+        code = (stock_code or "").strip()
+        if not code:
+            raise DataFetchError("ticker 为空")
+
+        upper = code.upper()
+        if upper.isdigit():
+            raise DataFetchError(f"当前版本仅支持美股 ticker，收到纯数字代码: {code}")
+
+        if any(suffix in upper for suffix in (".SS", ".SZ", ".SH")):
+            raise DataFetchError(f"当前版本仅支持美股 ticker，收到非美股后缀代码: {code}")
+
+        return upper
     
     @retry(
         stop=stop_after_attempt(3),
@@ -108,8 +88,8 @@ class YfinanceFetcher(BaseFetcher):
         """
         import yfinance as yf
         
-        # 转换代码格式
-        yf_code = self._convert_stock_code(stock_code)
+        # 规范化 ticker
+        yf_code = self._normalize_ticker(stock_code)
         
         logger.debug(f"调用 yfinance.download({yf_code}, {start_date}, {end_date})")
         
@@ -144,6 +124,14 @@ class YfinanceFetcher(BaseFetcher):
         date, open, high, low, close, volume, amount, pct_chg
         """
         df = df.copy()
+
+        # yfinance 在部分版本/参数组合下会返回 MultiIndex 列（字段, ticker）。
+        # 当前实现一次只请求一个 ticker，因此这里将列扁平化为字段名。
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                df.columns = df.columns.get_level_values(0)
+            except Exception:
+                df.columns = [c[0] if isinstance(c, tuple) and c else str(c) for c in df.columns]
         
         # 重置索引，将日期从索引变为列
         df = df.reset_index()
@@ -151,6 +139,7 @@ class YfinanceFetcher(BaseFetcher):
         # 列名映射（yfinance 使用首字母大写）
         column_mapping = {
             'Date': 'date',
+            'Datetime': 'date',
             'Open': 'open',
             'High': 'high',
             'Low': 'low',
