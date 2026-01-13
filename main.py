@@ -223,6 +223,59 @@ class StockAnalysisPipeline:
         try:
             # 美股模式：默认使用 ticker 作为名称
             stock_name = code
+
+            def _assess_data_quality() -> Tuple[str, List[str]]:
+                """Assess price data quality from DB for this ticker.
+
+                Returns:
+                    (level, issues)
+                    level: GOOD/WARN/BAD
+                """
+                issues: List[str] = []
+                try:
+                    latest_rows = self.db.get_latest_data(code, days=30)
+                except Exception as e:
+                    return "BAD", [f"无法读取本地行情数据: {e}"]
+
+                if not latest_rows:
+                    return "BAD", ["本地无任何行情数据"]
+
+                latest = latest_rows[0]
+
+                # Freshness
+                try:
+                    if latest.date:
+                        age_days = (date.today() - latest.date).days
+                        if age_days > 7:
+                            issues.append(f"数据较旧（距今 {age_days} 天）")
+                except Exception:
+                    issues.append("无法判断数据新鲜度")
+
+                # Minimum history for MAs
+                if len(latest_rows) < 20:
+                    issues.append(f"历史样本较少（仅 {len(latest_rows)} 根日K，均线/趋势可靠性下降）")
+
+                # Basic sanity checks
+                try:
+                    if latest.close is None or latest.close <= 0:
+                        issues.append("收盘价异常")
+                    if latest.volume is None or latest.volume <= 0:
+                        issues.append("成交量为 0/缺失")
+                    if latest.high is not None and latest.low is not None and latest.high < latest.low:
+                        issues.append("最高价/最低价异常")
+                except Exception:
+                    issues.append("行情字段完整性检查失败")
+
+                # Decide level
+                if not issues:
+                    return "GOOD", []
+                if any(
+                    key in issue
+                    for issue in issues
+                    for key in ("本地无任何行情数据", "无法读取本地行情数据", "收盘价异常")
+                ):
+                    return "BAD", issues
+                return "WARN", issues
             
             # Step 3: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
@@ -276,9 +329,32 @@ class StockAnalysisPipeline:
                 trend_result,
                 stock_name  # 传入股票名称
             )
+
+            # 数据质量与来源（不依赖 AI 推断；在报告中用于解释可信度）
+            source_used = None
+            try:
+                source_used = (context.get('today') or {}).get('data_source')
+            except Exception:
+                source_used = None
+            quality_level, quality_issues = _assess_data_quality()
+            enhanced_context['data_source'] = source_used or 'Unknown'
+            enhanced_context['data_quality'] = {
+                'level': quality_level,
+                'issues': quality_issues,
+            }
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
+
+            # 将“数据来源/质量”写回结果，确保报告展示稳定、可审计（不依赖模型输出字段）
+            if result:
+                badge = {
+                    'GOOD': '✅',
+                    'WARN': '⚠️',
+                    'BAD': '❌',
+                }.get(quality_level, 'ℹ️')
+                issues_text = ("; ".join(quality_issues)) if quality_issues else "无明显问题"
+                result.data_sources = f"行情: {enhanced_context['data_source']} | 数据质量: {badge}{quality_level}（{issues_text}）"
             
             return result
             
@@ -801,7 +877,17 @@ def main() -> int:
             if not chunk:
                 continue
             out.extend([p for p in chunk.split() if p])
-        return out
+
+        cleaned: List[str] = []
+        for sym in out:
+            s = (sym or '').strip()
+            if not s:
+                continue
+            # 容错：去掉尾部标点（不影响 BRK.B 这种合法 ticker）
+            s = s.rstrip('.,')
+            cleaned.append(s.upper())
+
+        return cleaned
 
     # 解析股票列表
     stock_codes = None

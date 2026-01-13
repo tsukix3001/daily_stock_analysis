@@ -39,7 +39,17 @@ def _parse_symbol_list(raw: str) -> List[str]:
         # Also split by whitespace inside a chunk
         parts.extend([p for p in chunk.split() if p])
 
-    return parts
+    cleaned: List[str] = []
+    for sym in parts:
+        s = (sym or '').strip()
+        if not s:
+            continue
+        # 容错：去掉用户误带的尾部标点（不影响 BRK.B 这种合法 ticker）
+        s = s.rstrip('.,')
+        s = s.upper()
+        cleaned.append(s)
+
+    return cleaned
 
 
 def _is_placeholder_value(value: str) -> bool:

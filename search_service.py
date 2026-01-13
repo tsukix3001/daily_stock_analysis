@@ -406,19 +406,22 @@ class SearchService:
         Returns:
             SearchResponse 对象
         """
-        # 默认重点关注关键词（基于交易理念）
+        # 默认重点关注关键词（基于美股交易语境）
         if focus_keywords is None:
             focus_keywords = [
-                "年报预告", "业绩预告", "业绩快报",  # 业绩相关
-                "减持", "增持", "回购",              # 股东动向
-                "机构调研", "机构评级",              # 机构动向
-                "利好", "利空",                      # 消息面
-                "合同", "订单", "中标",              # 业务进展
+                "earnings", "guidance", "forecast",  # 财报/指引
+                "10-Q", "10-K", "8-K", "SEC filing",  # 披露
+                "insider selling", "insider buying",     # 内部人交易
+                "share repurchase", "buyback",           # 回购
+                "secondary offering", "dilution",        # 增发/摊薄
+                "downgrade", "upgrade",                  # 评级
+                "lawsuit", "investigation",              # 诉讼/调查
+                "contract", "order", "partnership",     # 业务进展
             ]
         
         # 构建搜索查询（优化搜索效果）
         # 主查询：股票名称 + 核心关键词
-        query = f"{stock_name} {stock_code} 股票 最新消息"
+        query = f"{stock_name} {stock_code} stock latest news"
         
         logger.info(f"搜索股票新闻: {stock_name}({stock_code})")
         
@@ -450,8 +453,8 @@ class SearchService:
         stock_name: str,
         event_types: Optional[List[str]] = None
     ) -> SearchResponse:
-        """
-        搜索股票特定事件（年报预告、减持等）
+        """ 
+        搜索股票特定事件（earnings、guidance、SEC filings、insider 等）
         
         专门针对交易决策相关的重要事件进行搜索
         
@@ -464,7 +467,16 @@ class SearchService:
             SearchResponse 对象
         """
         if event_types is None:
-            event_types = ["年报预告", "减持公告", "业绩快报"]
+            event_types = [
+                "earnings",
+                "guidance",
+                "10-Q",
+                "8-K",
+                "SEC filing",
+                "insider selling",
+                "share repurchase",
+                "secondary offering",
+            ]
         
         # 构建针对性查询
         event_query = " OR ".join(event_types)
@@ -501,8 +513,8 @@ class SearchService:
         
         搜索维度：
         1. 最新消息 - 近期新闻动态
-        2. 风险排查 - 减持、处罚、利空
-        3. 业绩预期 - 年报预告、业绩快报
+        2. 风险排查 - 诉讼、调查、监管、重大利空
+        3. Earnings / Guidance - 财报、指引、SEC 披露
         
         Args:
             stock_code: 股票代码
@@ -519,17 +531,17 @@ class SearchService:
         search_dimensions = [
             {
                 'name': 'latest_news',
-                'query': f"{stock_name} {stock_code} 最新 新闻 2026年1月",
+                'query': f"{stock_name} {stock_code} stock latest news",
                 'desc': '最新消息'
             },
             {
                 'name': 'risk_check', 
-                'query': f"{stock_name} 减持 处罚 利空 风险",
+                'query': f"{stock_name} {stock_code} lawsuit investigation SEC risk downgrade",
                 'desc': '风险排查'
             },
             {
                 'name': 'earnings',
-                'query': f"{stock_name} 年报预告 业绩预告 业绩快报 2025年报",
+                'query': f"{stock_name} {stock_code} earnings guidance 10-Q 10-K 8-K",
                 'desc': '业绩预期'
             },
         ]

@@ -451,6 +451,13 @@ class NotificationService:
                 f"## {signal_emoji} {stock_name} ({result.code})",
                 "",
             ])
+
+            # 数据来源/质量（由主流程写入 result.data_sources，确保可审计、非模型臆测）
+            if hasattr(result, 'data_sources') and result.data_sources:
+                report_lines.extend([
+                    f"*📋 数据来源：{result.data_sources}*",
+                    "",
+                ])
             
             # ========== 舆情与基本面概览（放在最前面）==========
             intel = dashboard.get('intelligence', {}) if dashboard else {}

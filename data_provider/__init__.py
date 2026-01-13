@@ -6,9 +6,11 @@
 
 from .base import BaseFetcher, DataFetcherManager
 from .yfinance_fetcher import YfinanceFetcher
+from .stooq_fetcher import StooqFetcher
 
 __all__ = [
     'BaseFetcher',
     'DataFetcherManager',
     'YfinanceFetcher',
+    'StooqFetcher',
 ]

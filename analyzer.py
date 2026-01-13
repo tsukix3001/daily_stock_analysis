@@ -281,16 +281,16 @@ class GeminiAnalyzer:
             "latest_news": "【最新消息】近期重要新闻摘要",
             "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"],
             "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
-            "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
+            "earnings_outlook": "Earnings / guidance 分析（基于财报、指引、10-Q/10-K/8-K 等）",
             "sentiment_summary": "舆情情绪一句话总结"
         },
         
         "battle_plan": {
             "sniper_points": {
-                "ideal_buy": "理想买入点：XX元（在MA5附近）",
-                "secondary_buy": "次优买入点：XX元（在MA10附近）",
-                "stop_loss": "止损位：XX元（跌破MA20或X%）",
-                "take_profit": "目标位：XX元（前高/整数关口）"
+                "ideal_buy": "理想买入点：$XX.XX（在MA5附近）",
+                "secondary_buy": "次优买入点：$XX.XX（在MA10附近）",
+                "stop_loss": "止损位：$XX.XX（跌破MA20或X%）",
+                "take_profit": "目标位：$XX.XX（前高/整数关口）"
             },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
@@ -614,6 +614,8 @@ class GeminiAnalyzer:
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
+    > 注意：当前项目仅分析美股。所有价格/金额请使用 **USD**（如 $203.17、$49.1M、$1.2B），不要使用“元/亿元/万元”等人民币单位。
+
 ## 📊 股票基础信息
 | 项目 | 数据 |
 |------|------|
@@ -628,10 +630,10 @@ class GeminiAnalyzer:
 ### 今日行情
 | 指标 | 数值 |
 |------|------|
-| 收盘价 | {today.get('close', 'N/A')} 元 |
-| 开盘价 | {today.get('open', 'N/A')} 元 |
-| 最高价 | {today.get('high', 'N/A')} 元 |
-| 最低价 | {today.get('low', 'N/A')} 元 |
+| 收盘价 | {self._format_price(today.get('close'))} |
+| 开盘价 | {self._format_price(today.get('open'))} |
+| 最高价 | {self._format_price(today.get('high'))} |
+| 最低价 | {self._format_price(today.get('low'))} |
 | 涨跌幅 | {today.get('pct_chg', 'N/A')}% |
 | 成交量 | {self._format_volume(today.get('volume'))} |
 | 成交额 | {self._format_amount(today.get('amount'))} |
@@ -652,7 +654,7 @@ class GeminiAnalyzer:
 ### 实时行情增强数据
 | 指标 | 数值 | 解读 |
 |------|------|------|
-| 当前价格 | {rt.get('price', 'N/A')} 元 | |
+| 当前价格 | {self._format_price(rt.get('price'))} | |
 | **量比** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **换手率** | **{rt.get('turnover_rate', 'N/A')}%** | |
 | 市盈率(动态) | {rt.get('pe_ratio', 'N/A')} | |
@@ -671,7 +673,7 @@ class GeminiAnalyzer:
 | 指标 | 数值 | 健康标准 |
 |------|------|----------|
 | **获利比例** | **{profit_ratio:.1%}** | 70-90%时警惕 |
-| 平均成本 | {chip.get('avg_cost', 'N/A')} 元 | 现价应高于5-15% |
+| 平均成本 | {self._format_price(chip.get('avg_cost'))} | 现价应高于5-15% |
 | 90%筹码集中度 | {chip.get('concentration_90', 0):.2%} | <15%为集中 |
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
@@ -721,8 +723,8 @@ class GeminiAnalyzer:
             prompt += f"""
 以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
-2. 🎯 **利好催化**：业绩、合同、政策
-3. 📊 **业绩预期**：年报预告、业绩快报
+2. 🎯 **利好催化**：财报、业绩指引（guidance）、订单/合同、监管/政策
+3. 📊 **Earnings / Guidance**：Earnings date、guidance、关键指标（revenue/gross margin/FCF 等）
 
 ```
 {news_context}
@@ -751,34 +753,60 @@ class GeminiAnalyzer:
 ### 决策仪表盘要求：
 - **核心结论**：一句话说清该买/该卖/该等
 - **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
-- **具体狙击点位**：买入价、止损价、目标价（精确到分）
+- **具体狙击点位**：买入价、止损价、目标价（精确到美分 / cents）
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 
 请输出完整的 JSON 格式决策仪表盘。"""
         
         return prompt
     
+    def _format_price(self, value: Optional[float]) -> str:
+        """Format price as USD for US tickers."""
+        if value is None:
+            return 'N/A'
+        try:
+            v = float(value)
+        except Exception:
+            return str(value)
+        return f"${v:.2f}"
+
     def _format_volume(self, volume: Optional[float]) -> str:
-        """格式化成交量显示"""
+        """格式化成交量显示（shares）"""
         if volume is None:
             return 'N/A'
-        if volume >= 1e8:
-            return f"{volume / 1e8:.2f} 亿股"
-        elif volume >= 1e4:
-            return f"{volume / 1e4:.2f} 万股"
-        else:
-            return f"{volume:.0f} 股"
+
+        try:
+            v = float(volume)
+        except Exception:
+            return str(volume)
+
+        if v >= 1e9:
+            return f"{v / 1e9:.2f}B shares"
+        if v >= 1e6:
+            return f"{v / 1e6:.2f}M shares"
+        if v >= 1e3:
+            return f"{v / 1e3:.2f}K shares"
+        return f"{v:.0f} shares"
     
     def _format_amount(self, amount: Optional[float]) -> str:
-        """格式化成交额显示"""
+        """格式化成交额/市值显示（USD）"""
         if amount is None:
             return 'N/A'
-        if amount >= 1e8:
-            return f"{amount / 1e8:.2f} 亿元"
-        elif amount >= 1e4:
-            return f"{amount / 1e4:.2f} 万元"
-        else:
-            return f"{amount:.0f} 元"
+
+        try:
+            v = float(amount)
+        except Exception:
+            return str(amount)
+
+        if v >= 1e12:
+            return f"${v / 1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v / 1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v / 1e6:.2f}M"
+        if v >= 1e3:
+            return f"${v / 1e3:.2f}K"
+        return f"${v:.0f}"
     
     def _parse_response(
         self, 

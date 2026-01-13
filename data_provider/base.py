@@ -262,9 +262,12 @@ class DataFetcherManager:
         当前版本仅支持美股 ticker，因此默认只启用 Yahoo Finance（yfinance）。
         """
         from .yfinance_fetcher import YfinanceFetcher
+        from .stooq_fetcher import StooqFetcher
 
+        # 免费优先：默认使用 yfinance；Stooq 作为备用源（failover）
         self._fetchers = [
             YfinanceFetcher(),
+            StooqFetcher(),
         ]
         
         # 按优先级排序
